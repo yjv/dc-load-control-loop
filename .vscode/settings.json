@@ -6,6 +6,13 @@
         "istream": "cpp",
         "functional": "cpp",
         "tuple": "cpp",
-        "utility": "cpp"
+        "utility": "cpp",
+        "limits": "cpp",
+        "type_traits": "cpp",
+        "random": "cpp",
+        "optional": "cpp",
+        "stdlib.h": "c",
+        "string": "cpp",
+        "string_view": "cpp"
     }
 }
