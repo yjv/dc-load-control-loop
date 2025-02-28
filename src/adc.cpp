@@ -4,7 +4,7 @@
 
 void ADC::_beginTransaction()
 {
-    _spi->beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE2));
+    _spi->beginTransaction(SPISettings(100000, MSBFIRST, SPI_MODE2));
 }
 
 void ADC::_endTransaction()
@@ -45,7 +45,7 @@ void ADC::_writeRegisterNoTransaction(Register8Bit reg, uint8_t data, bool confi
     {
         _spi->writeBytes(data_array, 2);
         read_data = _readRegisterNoTransaction(reg);
-        Serial.printf("Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
+        ESP_LOGI("adc", "Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
     } while (confirm && read_data != data);
 }
 
@@ -80,7 +80,7 @@ void ADC::_writeRegisterNoTransaction(Register16Bit reg, uint16_t data, bool con
     {
         _spi->writeBytes(data_array, 3);
         read_data = _readRegisterNoTransaction(reg);
-        Serial.printf("Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
+        ESP_LOGI("adc", "Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
     } while (confirm && read_data != data);
 }
 
@@ -110,7 +110,7 @@ void ADC::_writeRegisterNoTransaction(Register24Bit reg, uint32_t data, bool con
     {
         _spi->writeBytes(data_array, 4);
         read_data = _readRegisterNoTransaction(reg);
-        Serial.printf("Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
+        ESP_LOGI("adc", "Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
     } while (confirm && read_data != data);
 }
 
@@ -133,6 +133,7 @@ void ADC::initialize()
     pinMode(_cs, OUTPUT);
     _spi->begin(_sclk, _cipo, _copi, _cs);
     _spi->setHwCs(true);
+    _spi->bus();
 }
 
 void ADC::reset()
@@ -258,17 +259,18 @@ void ADC::configureMode(Mode mode, bool single_cycle_settling, SettleDelay settl
  * append_status will append the contents of the STATUS register to the reading
  * enable_crc will enable CRC checking
  */
-void ADC::configureInterface(bool continuous_read, bool append_status, CrcMode crc_mode)
+void ADC::configureInterface(bool io_strength, bool continuous_read, bool append_status, CrcMode crc_mode)
 {
     _append_status = append_status;
     _continuous_read = continuous_read;
     _crc_mode = crc_mode;
 
-    uint16_t data = (continuous_read ? 1 : 0) << 7
+    uint16_t data = (io_strength ? 1 : 0) << 11
+        | (continuous_read ? 1 : 0) << 7
         | (append_status ? 1 : 0) << 6
         | static_cast<uint8_t>(crc_mode) << 2;
 
-    writeRegister(Register::IFMODE, data, true);
+    writeRegister(Register::IFMODE, data, !continuous_read);
 }
 
 /**
@@ -330,18 +332,11 @@ void ADC::configureSetup(Setup setup, Filter filter, FilterSampleRate sample_rat
     _endTransaction();
 }
 
-ADC * instance = nullptr;
-
-void ADC::startReading(std::function<void(Reading)> callback)
+void ADC::startReading()
 {
     _spi->setHwCs(false);
-    _read_callback = callback;
-    instance = this;
-    attachInterrupt(digitalPinToInterrupt(_cipo), []{ 
-        instance->_read_callback(instance->read());
-     }, FALLING);
-    digitalWrite(_cs, LOW);
     _beginTransaction();
+    digitalWrite(_cs, LOW);
 }
 
 void ADC::stopReading()
@@ -349,8 +344,6 @@ void ADC::stopReading()
     _endTransaction();
     digitalWrite(_cs, HIGH);
     detachInterrupt(digitalPinToInterrupt(_cipo));
-    _read_callback = nullptr;
-    instance = nullptr;
     _spi->setHwCs(true);
 }
 

@@ -269,12 +269,12 @@ public:
     uint16_t getId();
     Status getStatus();
     void configureMode(Mode mode, bool single_cycle_settling, SettleDelay settle_delay);
-    void configureInterface(bool continuous_read, bool append_status, CrcMode crc_mode);
+    void configureInterface(bool io_strength, bool continuous_read, bool append_status, CrcMode crc_mode);
     void configureChannel(Channel channel,Setup setup, ChannelInput positive_input, ChannelInput negative_input);
     void disableChannel(Channel channel);
     void enableChannel(Channel channel);
     void configureSetup(Setup setup, Filter filter, FilterSampleRate sample_rate);
-    void startReading(std::function<void(Reading)> callback);
+    void startReading();
     void stopReading();
     Reading read();
 };

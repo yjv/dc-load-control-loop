@@ -2,7 +2,20 @@
 #include <SPI.h>
 #include <adc.h>
 #include <QuickPID.h>
+// #include "soc/rtc.h"
+// #include "hal/wdt_hal.h"
+// #include "rtc_wdt.h"
 
+// #ifdef CORE_DEBUG_LEVEL
+// #undef CORE_DEBUG_LEVEL
+// #endif
+
+// #define CORE_DEBUG_LEVEL 5
+// #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+
+static constexpr uint8_t GATE_DRIVE_SCLK = D5;
+static constexpr uint8_t GATE_DRIVE_COPI = D6;
+static constexpr uint8_t GATE_DRIVE_CIPO = D4;
 static constexpr uint8_t SENSE_ERROR = D7;
 static constexpr uint8_t GATE_DRIVE_LDAC = D8;
 static constexpr uint8_t GATE_DRIVE_CS = D9;
@@ -19,36 +32,42 @@ SPIClass gateSPI(FSPI);
 
 ADC adc(HSPI, SCLK, CIPO, COPI, SENSE_CS);
 
-uint32_t currentCode;
-uint32_t voltageCode;
+uint32_t currentCode = 0;
+uint32_t voltageCode = 0;
 
 float current;
 float voltage;
 float power;
 float resistance;
-float setpoint = 0.5f;
+float setpoint = 0.25f;
 
 Reading reading(Status(0), 0);
-QuickPID pid(&current, &gate, &setpoint, 1.0f, 1.0f, 0.0f, QuickPID::pMode::pOnError, QuickPID::dMode::dOnError, QuickPID::iAwMode::iAwCondition, QuickPID::Action::direct);
+QuickPID pid(&current, &gate, &setpoint, 4.0f, 0.0f, 0.0f, QuickPID::pMode::pOnError, QuickPID::dMode::dOnError, QuickPID::iAwMode::iAwCondition, QuickPID::Action::direct);
 
-void IRAM_ATTR readADC(Reading reading)
+static QueueHandle_t reading_queue;
+static const int reading_queue_len = 200;
+
+SemaphoreHandle_t semaphore;
+#define TAG "main"
+
+boolean updated = false;
+
+void IRAM_ATTR readADC()
 {
-  if (reading.getStatus().currentConversionChannel() == Channel::CH1)
-  {
-    currentCode = reading.getData();
-    current = static_cast<float>(currentCode) / 16777216.0 * 5.0 / 50 / 0.0047;
-  }
+  reading = adc.read();
 
-  if (reading.getStatus().currentConversionChannel() == Channel::CH0)
-  {
-    voltageCode = reading.getData();
-    voltage = static_cast<float>(voltageCode) / 16777216.0 * 5.0 / (16e-3/2.13);
-  }
+  xQueueSendFromISR(reading_queue, &reading, NULL);
+  // if (reading.getStatus().currentConversionChannel() == Channel::CH1)
+  // {
+  //   currentCode = reading.getData();
+  // }
 
-  power = current * voltage;
-  resistance = voltage / max(current, 0.000001f);
+  // if (reading.getStatus().currentConversionChannel() == Channel::CH0)
+  // {
+  //   voltageCode = reading.getData();
+  // }
 
-  // Serial.printf("Reading: %07d, Status: 0x%02x, Current: %fA, Voltage: %fV, Power: %fW, Resistance: %fOhm, Gate: %fV, Gate Code: %d\n", 
+  // ESP_LOGI(TAG, "Reading: %07d, Status: 0x%02x, Current: %fA, Voltage: %fV, Power: %fW, Resistance: %fOhm, Gate: %fV, Gate Code: %d\n", 
   //   reading.getData(), 
   //   reading.getStatus().currentConversionChannel().getNumber(),
   //   current,
@@ -59,6 +78,31 @@ void IRAM_ATTR readADC(Reading reading)
   //   gateCode
   // );
 
+  // current = (float)currentCode / 16777216.0 * 5.0 / 50 / 0.0047;
+  // voltage = static_cast<float>(voltageCode) / 16777216.0 * 5.0 / (16e-3/2.13);
+  // power = current * voltage;
+  // resistance = voltage / max(current, 0.000001f);
+
+  // ESP_LOGI(TAG, "Reading: %07d, Status: 0x%02x, Current: %fA, Voltage: %fV, Power: %fW, Resistance: %fOhm, Gate: %fV, Gate Code: %d\n", 
+  //   reading.getData(), 
+  //   reading.getStatus().currentConversionChannel().getNumber(),
+  //   current,
+  //   voltage,
+  //   power,
+  //   resistance,
+  //   gate,
+  //   gateCode
+  // );
+    // ESP_LOGI(TAG, "taking semaphore in interupt");
+
+  // do {} while (xSemaphoreTakeFromISR(semaphore, NULL) != pdPASS);
+  // ESP_LOGI(TAG, "got semaphore in interupt");
+  // current = static_cast<float>(currentCode) / 16777216.0 * 5.0 / 50 / 0.0047;
+  // voltage = static_cast<float>(voltageCode) / 16777216.0 * 5.0 / (16e-3/2.13);
+  // power = current * voltage;
+  // resistance = voltage / max(current, 0.000001f);
+
+  // xSemaphoreGiveFromISR(semaphore, NULL);
   // updateDac();
 }
 
@@ -75,11 +119,9 @@ void updateDac()
   //   gateCode
   // );
 
-  pid.Compute();
-
   gateCode = static_cast<uint32_t>(gate / 5.0 * 1048576.0f);
 
-  gateSPI.beginTransaction(SPISettings(50000000, MSBFIRST, SPI_MODE0));
+  gateSPI.beginTransaction(SPISettings(500000, MSBFIRST, SPI_MODE0));
   gateSPI.transferBits(gateCode << 4, NULL, 24);
   gateSPI.endTransaction();
  
@@ -87,12 +129,41 @@ void updateDac()
   digitalWrite(GATE_DRIVE_LDAC, HIGH);
 }
 
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
+TaskHandle_t adcTask;
 
+// wdt_hal_context_t rwdt_ctx;
+
+void runAdc( void * pvParameters ) {
+
+  ESP_LOGI(TAG, "Task2 running on core ");
+  ESP_LOGI(TAG, "%d", xPortGetCoreID());
+  // wdt_hal_disable();
+
+  for(;;){
+    delay(10);
+  } 
+}
+
+void setup() {
+  esp_reset_reason_t reason = esp_reset_reason();
+
+  esp_log_level_set("*", ESP_LOG_DEBUG);
+  // put your setup code here, to run once:
+  Serial.begin(115200);
+  delay(5000);
+  Serial.printf("LOG_LOCAL_LEVEL %d\n", LOG_LOCAL_LEVEL);
+  Serial.setDebugOutput(true);
+  ESP_LOGE(TAG, "Reset reason: %d", reason);
+  ESP_LOGE(TAG, "ESP_LOGE, level 1 = ARDUHAL_LOG_LEVEL_ERROR   = ESP_LOG_ERROR");
+  ESP_LOGW(TAG, "ESP_LOGW, level 2 = ARDUHAL_LOG_LEVEL_WARN    = ESP_LOG_WARN");    
+  ESP_LOGI(TAG, "ESP_LOGI, level 3 = ARDUHAL_LOG_LEVEL_INFO    = ESP_LOG_INFO");
+  ESP_LOGD(TAG, "ESP_LOGD, level 4 = ARDUHAL_LOG_LEVEL_DEBUG   = ESP_LOG_DEBUG");
+  ESP_LOGV(TAG, "ESP_LOGV, level 5 = ARDUHAL_LOG_LEVEL_VERBOSE = ESP_LOG_VERBOSE");
   pinMode(SENSE_ERROR, INPUT);
   pinMode(GATE_DRIVE_LDAC, OUTPUT);
+  pinMode(GATE_DRIVE_COPI, OUTPUT);
+  pinMode(GATE_DRIVE_CIPO, INPUT);
+  pinMode(GATE_DRIVE_SCLK, OUTPUT);
   pinMode(GATE_DRIVE_CS, OUTPUT);
   pinMode(SENSE_CS, OUTPUT);
   pinMode(COPI, OUTPUT);
@@ -100,28 +171,28 @@ void setup() {
   pinMode(SCLK, OUTPUT);
 
   digitalWrite(GATE_DRIVE_LDAC, HIGH);
-  digitalWrite(GATE_DRIVE_CS, HIGH);
-
-  delay(100);
+  digitalWrite(GATE_DRIVE_CS, LOW);
 
   Serial.println("Starting SPI...");
 
-  // gateSPI.begin(SCLK, CIPO, COPI, GATE_DRIVE_CS);
-  // gateSPI.setHwCs(true);
+  gateSPI.begin(GATE_DRIVE_SCLK, GATE_DRIVE_CIPO, GATE_DRIVE_COPI, GATE_DRIVE_CS);
+  gateSPI.setHwCs(true);
 
   Serial.println("Starting ADC...");
 
+  reading_queue = xQueueCreate(reading_queue_len, sizeof(Reading));
   adc.initialize();
   adc.reset();
   adc.configureMode(Mode::CONTINUOUS, false, SettleDelay::DELAY_0_US);
-  adc.configureSetup(Setup::SETUP0, Filter::Sinc5Sinc1, FilterSampleRate::SPS_15625);
-  adc.configureSetup(Setup::SETUP1, Filter::Sinc5Sinc1, FilterSampleRate::SPS_15625);
+  adc.configureSetup(Setup::SETUP0, Filter::Sinc5Sinc1, FilterSampleRate::SPS_1000);
+  adc.configureSetup(Setup::SETUP1, Filter::Sinc5Sinc1, FilterSampleRate::SPS_1000);
   adc.configureChannel(Channel::CH0, Setup::SETUP0, ChannelInput::AIN1, ChannelInput::AIN0);
   adc.configureChannel(Channel::CH1, Setup::SETUP1, ChannelInput::AIN3, ChannelInput::AIN2);
   adc.disableChannel(Channel::CH2);
   adc.disableChannel(Channel::CH3);
-  adc.configureInterface(true, true, CrcMode::CRC_DISABLED);
-  adc.startReading(readADC);
+  adc.configureInterface(true, true, true, CrcMode::CRC_DISABLED);
+  attachInterrupt(digitalPinToInterrupt(CIPO), readADC, FALLING);
+  adc.startReading();  
 
   pid.SetSampleTimeUs(100);
   pid.SetOutputLimits(0, 5.0);
@@ -131,6 +202,62 @@ void setup() {
 uint8_t ready = 0;
 
 void loop() {
+
+  Reading reading(Status(0), 0);
+  uint8_t reading_count = 0;
+
+  while (xQueueReceive(reading_queue, (void *)&reading, 0) == pdTRUE) {
+
+    reading_count++;
+
+    if (reading.getStatus().currentConversionChannel() == Channel::CH1)
+    {
+      currentCode = reading.getData();
+      current = static_cast<float>(currentCode) / 16777216.0 * 5.0 / 50 / 0.0047;
+    }
+
+    if (reading.getStatus().currentConversionChannel() == Channel::CH0)
+    {
+      voltageCode = reading.getData();
+      voltage = static_cast<float>(voltageCode) / 16777216.0 * 5.0 / (16e-3/2.13);
+    }
+
+    power = current * voltage;
+    resistance = voltage / max(current, 0.000001f);
+
+    if (pid.Compute())
+    {
+      updateDac();
+    }
+  }
+
+  ESP_LOGI(TAG, "Reading count: %d, Reading: %07d, Status: 0x%02x, Current: %fA, Voltage: %fV, Power: %fW, Resistance: %fOhm, Gate: %fV, Gate Code: %d\n", 
+    reading_count,
+    reading.getData(), 
+    reading.getStatus().currentConversionChannel().getNumber(),
+    current,
+    voltage,
+    power,
+    resistance,
+    gate,
+    gateCode
+  );
+
+  // while (!updated) {
+  //   vTaskDelay(1000 / portTICK_PERIOD_MS);
+  // }
+
+  // xSemaphoreGive(semaphore);
+
+  // ESP_LOGI("adc", "Current: %fA, Voltage: %fV, Power: %fW, Resistance: %fOhm", 
+  //   // reading.getData(), 
+  //   // reading.getStatus().currentConversionChannel().getNumber(),
+  //   current,
+  //   voltage,
+  //   power,
+  //   resistance
+  // );
+
   // uint8_t newReady = digitalRead(CIPO);
 
   // if ( newReady!= ready)
@@ -155,15 +282,18 @@ void loop() {
   //   {
   //     voltageCode = reading.getData();
   //   }
-  
-  // Serial.printf("Reading: %07d, Status: 0x%02x, Current: %fA, Voltage: %fV, Power: %fW, Resistance: %fOhm, Gate: %fV\n", 
+  // ESP_LOGI("adc", "Task2 running on core ");
+  // ESP_LOGI("adc", "%d", xPortGetCoreID());
+
+  // Serial.printf("Current: %fA, Voltage: %fV, Power: %fW, Resistance: %fOhm, Gate: %fV, Gate Code: %d\n", 
   //   reading.getData(), 
   //   reading.getStatus().currentConversionChannel().getNumber(),
   //   current,
   //   voltage,
   //   power,
   //   resistance,
-  //   gate
+  //   gate,
+  //   gateCode
   // );
 
     // Serial.printf("ADCMODE: 0x%04x\n", adc.readRegister(Register::ADCMODE));

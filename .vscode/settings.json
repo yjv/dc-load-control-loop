@@ -13,6 +13,13 @@
         "optional": "cpp",
         "stdlib.h": "c",
         "string": "cpp",
-        "string_view": "cpp"
+        "string_view": "cpp",
+        "exception": "cpp",
+        "fstream": "cpp",
+        "new": "cpp",
+        "ostream": "cpp",
+        "sstream": "cpp",
+        "stdexcept": "cpp",
+        "streambuf": "cpp"
     }
 }
