@@ -12,24 +12,99 @@ void ADC::_endTransaction()
     _spi->endTransaction();
 }
 
-void IRAM_ATTR ADC::_read_to_callback()
-{
-    Reading reading = read();
 
-    if (_read_callback)
-    {
-        _read_callback(reading);
+uint8_t xorChecksum(uint8_t *data, uint8_t size) {
+    uint8_t checksum = 0;
+    for (uint8_t i = 0; i < size; i++) {
+        checksum ^= data[i];
     }
+    return checksum;
+}
+
+#define AD717X_CRC8_POLYNOMIAL_REPRESENTATION 0x07 /* x8 + x2 + x + 1 */
+
+uint8_t crc8Checksum(uint8_t * data, uint8_t size)
+{
+    uint8_t i   = 0;
+    uint8_t crc = 0;
+
+    while (size) {
+        for (i = 0x80; i != 0; i >>= 1) {
+            if (((crc & 0x80) != 0) != ((*data & i) != 0)) { /* MSB of CRC register XOR input Bit from Data */
+                crc <<= 1;
+                crc ^= AD717X_CRC8_POLYNOMIAL_REPRESENTATION;
+            } else {
+                crc <<= 1;
+            }
+        }
+        
+        data++;
+        size--;
+    }
+    return crc;
+}
+
+void appendChecksum(uint8_t * data, uint8_t size, ChecksumMode mode)
+{
+    switch (mode)
+    {
+        case ChecksumMode::CHECKSUM_DISABLED:
+            break;
+        case ChecksumMode::XOR_READ_CRC_WRITE:
+            data[size] = xorChecksum(data, size);
+            break;
+        case ChecksumMode::CRC:
+            data[size] = crc8Checksum(data, size);
+            break;
+    }
+}
+
+bool validateChecksum(uint8_t * data, uint8_t size, ChecksumMode mode)
+{
+    uint8_t checksum = 0;
+
+    switch (mode)
+    {
+        case ChecksumMode::CHECKSUM_DISABLED:
+            return true;
+        case ChecksumMode::XOR_READ_CRC_WRITE:
+            checksum = xorChecksum(data, size - 1);
+            break;
+        case ChecksumMode::CRC:
+            checksum = crc8Checksum(data, size - 1);
+            break;
+    }
+
+    if (checksum != data[size - 1])
+    {
+        uint64_t content = 0;
+
+        for (size_t i = 0; i < size - 1; i++)
+        {
+            content |= data[i] << (8 * (size - 1 - i));
+        }
+        
+        ESP_LOGW("adc", "Register: 0x%02x checksum mismatch: 0x%02x != 0x%02x for content 0x%016x\n", data[0], checksum, data[size - 1], content);
+        return false;
+    }
+
+    ESP_LOGD("adc", "Register: 0x%02x checksum match: 0x%02x == 0x%02x\n", data[0], checksum, data[size - 1]);
+    
+    return true;
 }
 
 uint8_t ADC::_readRegisterNoTransaction(Register8Bit reg)
 {
     uint8_t register_byte = static_cast<uint8_t>(RegisterOperation::READ) | static_cast<uint8_t>(reg);
 
-    uint8_t input[2] = {register_byte, 0};
-    uint8_t output[2];
+    uint8_t input[3] = {register_byte, 0, 0};
+    uint8_t * output = new uint8_t[3];
 
-    _spi->transferBytes(input, output, 2);
+    do
+    {
+        _spi->transferBytes(input, output, _checksum_mode == ChecksumMode::CHECKSUM_DISABLED ? 2 : 3);
+        output[0] = register_byte;
+    } while (!validateChecksum(output, 2, _checksum_mode));
 
     return output[1];
 }
@@ -37,13 +112,15 @@ uint8_t ADC::_readRegisterNoTransaction(Register8Bit reg)
 void ADC::_writeRegisterNoTransaction(Register8Bit reg, uint8_t data, bool confirm)
 {
     uint8_t register_byte = static_cast<uint8_t>(RegisterOperation::WRITE) | static_cast<uint8_t>(reg);
-    uint8_t data_array[] = {register_byte, data};
+    uint8_t data_array[] = {register_byte, data, 0};
+
+    appendChecksum(data_array, 2, _checksum_mode);
 
     uint8_t read_data;
 
     do
     {
-        _spi->writeBytes(data_array, 2);
+        _spi->writeBytes(data_array, _checksum_mode == ChecksumMode::CHECKSUM_DISABLED ? 2 : 3);
         read_data = _readRegisterNoTransaction(reg);
         ESP_LOGI("adc", "Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
     } while (confirm && read_data != data);
@@ -53,14 +130,18 @@ uint16_t ADC::_readRegisterNoTransaction(Register16Bit reg)
 {
     uint8_t register_byte = static_cast<uint8_t>(RegisterOperation::READ) | static_cast<uint8_t>(reg);
 
-    uint8_t input[3] = {register_byte, 0, 0};
-    uint8_t output[3];
+    uint8_t input[4] = {register_byte, 0, 0, 0};
+    uint8_t output[4];
 
-    _spi->transferBytes(
-        input,
-        output,
-        3
-    );
+    do
+    {
+        _spi->transferBytes(
+            input,
+            output,
+            _checksum_mode == ChecksumMode::CHECKSUM_DISABLED ? 3 : 4
+        );
+        output[0] = register_byte;
+    } while (!validateChecksum(output, 3, _checksum_mode));
 
     return (static_cast<uint16_t>(output[1]) << 8) | static_cast<uint16_t>(output[2]);
 }
@@ -71,14 +152,17 @@ void ADC::_writeRegisterNoTransaction(Register16Bit reg, uint16_t data, bool con
     uint8_t data_array[] = {
         register_byte,
         static_cast<uint8_t>((data & 0xff00) >> 8),
-        static_cast<uint8_t>(data & 0x00ff)
+        static_cast<uint8_t>(data & 0x00ff),
+        0
     };
+
+    appendChecksum(data_array, 3, _checksum_mode);
 
     uint16_t read_data;
 
     do
     {
-        _spi->writeBytes(data_array, 3);
+        _spi->writeBytes(data_array, _checksum_mode == ChecksumMode::CHECKSUM_DISABLED ? 3 : 4);
         read_data = _readRegisterNoTransaction(reg);
         ESP_LOGI("adc", "Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
     } while (confirm && read_data != data);
@@ -87,28 +171,41 @@ void ADC::_writeRegisterNoTransaction(Register16Bit reg, uint16_t data, bool con
 uint32_t ADC::_readRegisterNoTransaction(Register24Bit reg)
 {
     uint8_t register_byte = static_cast<uint8_t>(RegisterOperation::READ) | static_cast<uint8_t>(reg);
-    uint8_t input[4] = {register_byte, 0, 0, 0};
-    uint8_t output[4];
 
-    _spi->transferBytes(input, output, 4);
+    uint8_t input[5] = {register_byte, 0, 0, 0, 0};
+    uint8_t output[5];
+
+    do
+    {
+        _spi->transferBytes(
+            input,
+            output,
+            _checksum_mode == ChecksumMode::CHECKSUM_DISABLED ? 4 : 5
+        );
+        output[0] = register_byte;
+    } while (!validateChecksum(output, 4, _checksum_mode));
+
     return (static_cast<uint32_t>(output[1]) << 16) | (static_cast<uint32_t>(output[2]) << 8) | static_cast<uint32_t>(output[3]);
 }
 
 void ADC::_writeRegisterNoTransaction(Register24Bit reg, uint32_t data, bool confirm)
 {
     uint8_t register_byte = static_cast<uint8_t>(RegisterOperation::WRITE) | static_cast<uint8_t>(reg);
-    uint8_t data_array[4] = {
+    uint8_t data_array[] = {
         register_byte,
         static_cast<uint8_t>((data & 0xff0000) >> 16),
         static_cast<uint8_t>((data & 0x00ff00) >> 8),
-        static_cast<uint8_t>(data & 0x0000ff)
+        static_cast<uint8_t>(data & 0x0000ff),
+        0
     };
-    
+
+    appendChecksum(data_array, 4, _checksum_mode);
+
     uint32_t read_data;
 
     do
     {
-        _spi->writeBytes(data_array, 4);
+        _spi->writeBytes(data_array, _checksum_mode == ChecksumMode::CHECKSUM_DISABLED ? 4 : 5);
         read_data = _readRegisterNoTransaction(reg);
         ESP_LOGI("adc", "Checking register 0x%02x, contents: 0x%04x, data: 0x%04x\n", reg, read_data, data);
     } while (confirm && read_data != data);
@@ -259,16 +356,16 @@ void ADC::configureMode(Mode mode, bool single_cycle_settling, SettleDelay settl
  * append_status will append the contents of the STATUS register to the reading
  * enable_crc will enable CRC checking
  */
-void ADC::configureInterface(bool io_strength, bool continuous_read, bool append_status, CrcMode crc_mode)
+void ADC::configureInterface(bool io_strength, bool continuous_read, bool append_status, ChecksumMode checksum_mode)
 {
     _append_status = append_status;
     _continuous_read = continuous_read;
-    _crc_mode = crc_mode;
+    _checksum_mode = checksum_mode;
 
     uint16_t data = (io_strength ? 1 : 0) << 11
         | (continuous_read ? 1 : 0) << 7
         | (append_status ? 1 : 0) << 6
-        | static_cast<uint8_t>(crc_mode) << 2;
+        | static_cast<uint8_t>(checksum_mode) << 2;
 
     writeRegister(Register::IFMODE, data, !continuous_read);
 }
@@ -354,13 +451,18 @@ void ADC::stopReading()
 Reading ADC::read()
 {
 
-    uint8_t register_byte = _continuous_read ? 0 : static_cast<uint8_t>(RegisterOperation::READ) | static_cast<uint8_t>(Register::DATA);
+    uint8_t register_byte = static_cast<uint8_t>(RegisterOperation::READ) | static_cast<uint8_t>(Register::DATA);
 
     uint32_t size = 3;
-    uint8_t input[5] = {register_byte, 0, 0, 0, 0};
-    uint8_t output[5];
+    uint8_t * input = new uint8_t[7]{register_byte, 0, 0, 0, 0, 0};
+    uint8_t * output = new uint8_t[7];
 
-    if (!_continuous_read)
+    if (_continuous_read)
+    {
+        input++;
+        output++;
+    }
+    else
     {
         size++;
     }
@@ -370,14 +472,28 @@ Reading ADC::read()
         size++;
     }
 
+    if (_checksum_mode != ChecksumMode::CHECKSUM_DISABLED)
+    {
+        size++;
+    }
+
     _spi->transferBytes(input, output, size);
 
-    uint8_t start_index = _continuous_read ? 0 : 1;
+    if (_continuous_read)
+    {
+        input--;
+        output--;
+        size++;
+    }
 
-    uint32_t reading_data = (output[start_index] << 16) | (output[start_index + 1] << 8) | output[start_index + 2];
-    Status status(_append_status ? output[start_index + 3] : _readRegisterNoTransaction(Register8Bit::STATUS));
+    output[0] = register_byte;
 
-    return Reading(status, reading_data);
+    bool checksum_valid = validateChecksum(output, size, _checksum_mode);
+
+    uint32_t reading_data = (output[1] << 16) | (output[2] << 8) | output[3];
+    Status status(_append_status ? output[4] : _readRegisterNoTransaction(Register8Bit::STATUS));
+
+    return Reading(checksum_valid, status, reading_data);
 }
 
 const Channel Channel::CH0(0 ,Register::CH0);

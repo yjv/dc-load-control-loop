@@ -216,18 +216,19 @@ enum class SettleDelay {
     DELAY_1_MS   = 0b111
 };
 
-enum class CrcMode : uint8_t {
-    CRC_DISABLED = 0b00,
-    CRC_XOR = 0b01,
-    CRC_POLYNOMIAL = 0b10,
+enum class ChecksumMode : uint8_t {
+    CHECKSUM_DISABLED = 0b00,
+    XOR_READ_CRC_WRITE = 0b01,
+    CRC = 0b10,
 };
 
 class Reading {
     private:
+        bool _valid;
         Status _status;
         uint32_t _data;
     public:
-        Reading(Status status, uint32_t data) : _status(status), _data(data) {}
+        Reading(bool valid, Status status, uint32_t data) : _valid(valid), _status(status), _data(data) {}
         Status getStatus() { return _status; }
         uint32_t getData() { return _data; }
 };
@@ -239,10 +240,9 @@ private:
     uint8_t _cipo;
     uint8_t _copi;
     uint8_t _cs;
-    CrcMode _crc_mode = CrcMode::CRC_DISABLED;
+    ChecksumMode _checksum_mode = ChecksumMode::CHECKSUM_DISABLED;
     bool _append_status = false;
     bool _continuous_read = false;
-    std::function<void(Reading)> _read_callback;
 
     void _beginTransaction();
     uint8_t _readRegisterNoTransaction(Register8Bit reg);
@@ -252,7 +252,6 @@ private:
     uint32_t _readRegisterNoTransaction(Register24Bit reg);
     void _writeRegisterNoTransaction(Register24Bit reg, uint32_t data, bool confirm);
     void _endTransaction();
-    void IRAM_ATTR _read_to_callback();
 public:
     ADC(uint8_t bus, uint8_t sclk, uint8_t cipo, uint8_t copi, uint8_t cs) : _spi(new SPIClass(bus)), _sclk(sclk), _cipo(cipo), _copi(copi), _cs(cs) {};
 
@@ -269,7 +268,7 @@ public:
     uint16_t getId();
     Status getStatus();
     void configureMode(Mode mode, bool single_cycle_settling, SettleDelay settle_delay);
-    void configureInterface(bool io_strength, bool continuous_read, bool append_status, CrcMode crc_mode);
+    void configureInterface(bool io_strength, bool continuous_read, bool append_status, ChecksumMode crc_mode);
     void configureChannel(Channel channel,Setup setup, ChannelInput positive_input, ChannelInput negative_input);
     void disableChannel(Channel channel);
     void enableChannel(Channel channel);

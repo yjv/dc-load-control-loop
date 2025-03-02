@@ -20,9 +20,9 @@ static constexpr uint8_t SENSE_ERROR = D7;
 static constexpr uint8_t GATE_DRIVE_LDAC = D8;
 static constexpr uint8_t GATE_DRIVE_CS = D9;
 static constexpr uint8_t SENSE_CS = D10;
-static constexpr uint8_t COPI = D11;
-static constexpr uint8_t CIPO = D12;
-static constexpr uint8_t SCLK = D13;
+static constexpr uint8_t SENSE_COPI = D11;
+static constexpr uint8_t SENSE_CIPO = D12;
+static constexpr uint8_t SENSE_SCLK = D13;
 
 uint32_t gateCode = 0;
 float gate = 0.0f;
@@ -30,7 +30,7 @@ float gate = 0.0f;
 // SPIClass senseSPI(HSPI);
 SPIClass gateSPI(FSPI);
 
-ADC adc(HSPI, SCLK, CIPO, COPI, SENSE_CS);
+ADC adc(HSPI, SENSE_SCLK, SENSE_CIPO, SENSE_COPI, SENSE_CS);
 
 uint32_t currentCode = 0;
 uint32_t voltageCode = 0;
@@ -41,8 +41,7 @@ float power;
 float resistance;
 float setpoint = 0.25f;
 
-Reading reading(Status(0), 0);
-QuickPID pid(&current, &gate, &setpoint, 4.0f, 0.0f, 0.0f, QuickPID::pMode::pOnError, QuickPID::dMode::dOnError, QuickPID::iAwMode::iAwCondition, QuickPID::Action::direct);
+QuickPID pid(&current, &gate, &setpoint, 8.0f, 3.0f, 0.0f, QuickPID::pMode::pOnError, QuickPID::dMode::dOnError, QuickPID::iAwMode::iAwCondition, QuickPID::Action::direct);
 
 static QueueHandle_t reading_queue;
 static const int reading_queue_len = 200;
@@ -54,7 +53,7 @@ boolean updated = false;
 
 void IRAM_ATTR readADC()
 {
-  reading = adc.read();
+  Reading reading = adc.read();
 
   xQueueSendFromISR(reading_queue, &reading, NULL);
   // if (reading.getStatus().currentConversionChannel() == Channel::CH1)
@@ -166,9 +165,9 @@ void setup() {
   pinMode(GATE_DRIVE_SCLK, OUTPUT);
   pinMode(GATE_DRIVE_CS, OUTPUT);
   pinMode(SENSE_CS, OUTPUT);
-  pinMode(COPI, OUTPUT);
-  pinMode(CIPO, INPUT);
-  pinMode(SCLK, OUTPUT);
+  pinMode(SENSE_COPI, OUTPUT);
+  pinMode(SENSE_CIPO, INPUT);
+  pinMode(SENSE_SCLK, OUTPUT);
 
   digitalWrite(GATE_DRIVE_LDAC, HIGH);
   digitalWrite(GATE_DRIVE_CS, LOW);
@@ -190,8 +189,10 @@ void setup() {
   adc.configureChannel(Channel::CH1, Setup::SETUP1, ChannelInput::AIN3, ChannelInput::AIN2);
   adc.disableChannel(Channel::CH2);
   adc.disableChannel(Channel::CH3);
-  adc.configureInterface(true, true, true, CrcMode::CRC_DISABLED);
-  attachInterrupt(digitalPinToInterrupt(CIPO), readADC, FALLING);
+  adc.configureInterface(true, true, true, ChecksumMode::CRC);
+  delay(5000);
+
+  attachInterrupt(digitalPinToInterrupt(SENSE_CIPO), readADC, FALLING);
   adc.startReading();  
 
   pid.SetSampleTimeUs(100);
@@ -203,7 +204,7 @@ uint8_t ready = 0;
 
 void loop() {
 
-  Reading reading(Status(0), 0);
+  Reading reading(false, Status(0), 0);
   uint8_t reading_count = 0;
 
   while (xQueueReceive(reading_queue, (void *)&reading, 0) == pdTRUE) {
