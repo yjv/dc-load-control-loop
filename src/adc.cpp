@@ -84,11 +84,11 @@ bool validateChecksum(uint8_t * data, uint8_t size, ChecksumMode mode)
             content |= data[i] << (8 * (size - 1 - i));
         }
         
-        ESP_LOGW("adc", "Register: 0x%02x checksum mismatch: 0x%02x != 0x%02x for content 0x%016x\n", data[0], checksum, data[size - 1], content);
+        ESP_DRAM_LOGW("adc", "Register: 0x%02x checksum mismatch: 0x%02x != 0x%02x for content 0x%016x\n", data[0], checksum, data[size - 1], content);
         return false;
     }
 
-    ESP_LOGD("adc", "Register: 0x%02x checksum match: 0x%02x == 0x%02x\n", data[0], checksum, data[size - 1]);
+    ESP_DRAM_LOGD("adc", "Register: 0x%02x checksum match: 0x%02x == 0x%02x\n", data[0], checksum, data[size - 1]);
     
     return true;
 }
@@ -239,8 +239,8 @@ void ADC::reset()
     // _spi->setHwCs(false);
     // digitalWrite(_spi->pinSS(), HIGH);
     // digitalWrite(_spi->pinSS(), LOW);
-    uint8_t data[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    _spi->writeBytes(data, 8);
+    uint8_t data[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    _spi->writeBytes(data, 9);
     // digitalWrite(_spi->pinSS(), HIGH);
     // _spi->setHwCs(true);
     _endTransaction();
@@ -493,7 +493,7 @@ Reading ADC::read()
     uint32_t reading_data = (output[1] << 16) | (output[2] << 8) | output[3];
     Status status(_append_status ? output[4] : _readRegisterNoTransaction(Register8Bit::STATUS));
 
-    return Reading(checksum_valid, status, reading_data);
+    return Reading(checksum_valid, status, reading_data, micros());
 }
 
 const Channel Channel::CH0(0 ,Register::CH0);

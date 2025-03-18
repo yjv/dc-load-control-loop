@@ -227,10 +227,13 @@ class Reading {
         bool _valid;
         Status _status;
         uint32_t _data;
+        unsigned long _time;
     public:
-        Reading(bool valid, Status status, uint32_t data) : _valid(valid), _status(status), _data(data) {}
+        Reading(bool valid, Status status, uint32_t data, long time) : _valid(valid), _status(status), _data(data), _time(time) {}
         Status getStatus() { return _status; }
         uint32_t getData() { return _data; }
+        unsigned long getTime() { return _time; }
+        bool isValid() { return _valid; }
 };
 
 class ADC {

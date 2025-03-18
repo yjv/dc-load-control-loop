@@ -20,6 +20,12 @@
         "ostream": "cpp",
         "sstream": "cpp",
         "stdexcept": "cpp",
-        "streambuf": "cpp"
+        "streambuf": "cpp",
+        "unordered_map": "cpp",
+        "algorithm": "cpp",
+        "memory_resource": "cpp",
+        "system_error": "cpp",
+        "cmath": "cpp",
+        "numeric": "cpp"
     }
 }
