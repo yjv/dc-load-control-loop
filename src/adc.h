@@ -1,4 +1,7 @@
-#include <stdint.h>
+#ifndef ADC_H
+#define ADC_H
+
+#include <cstdint>
 #include <SPI.h>
 #include <functional>
 
@@ -95,18 +98,18 @@ class Channel {
         Register16Bit _register;
         Channel(uint8_t number, Register16Bit reg) : _number(number), _register(reg) {}
     public:
-        bool operator == (const Channel &other) { return _number == other._number; }
+        bool operator == (const Channel &other) const { return _number == other._number; }
         static const Channel CH0;
         static const Channel CH1;
         static const Channel CH2;
         static const Channel CH3;
-        uint8_t getNumber() { return _number; }
-        Register16Bit getRegister() { return _register; }
+        uint8_t getNumber() const { return _number; }
+        Register16Bit getRegister() const { return _register; }
 };
 
 class Setup {
     private:
-        uint8_t _number;
+        uint16_t _number;
         Register16Bit _register;
         Register16Bit _filter_register;
         Setup(uint8_t number, Register16Bit reg, Register16Bit filter_reg) : _number(number), _register(reg), _filter_register(filter_reg) {}
@@ -115,9 +118,9 @@ class Setup {
         static const Setup SETUP1;
         static const Setup SETUP2;
         static const Setup SETUP3;
-        operator uint8_t() { return _number; }
-        Register16Bit getRegister() { return _register; }
-        Register16Bit getFilterRegister() { return _filter_register; }
+        explicit operator uint16_t() const { return _number; }
+        Register16Bit getRegister() const { return _register; }
+        Register16Bit getFilterRegister() const { return _filter_register; }
 };
 
 enum class Filter : uint8_t {
@@ -180,29 +183,29 @@ class Status {
     private:
         uint8_t _data;
     public:
-        Status(uint8_t data) : _data(data) {}
-        uint8_t getData() { return _data; }
+        explicit Status(uint8_t data) : _data(data) {}
+        uint8_t getData() const { return _data; }
         /**
          * Is there a reading ready?
          */
-        bool isReady() { return _data & 0x80; }
+        bool isReady() const { return _data & 0x80; }
         /**
          * Is there an error? Overvoltage/Undervoltage
          */
-        bool hasADCError() { return _data & 0x40; }
+        bool hasADCError() const { return _data & 0x40; }
         /**
          * Is there a CRC error in one of the communications to the ADC?
          */
-        bool hasCRCError() { return _data & 0x20; }
+        bool hasCRCError() const { return _data & 0x20; }
         /**
          * Is there an integrity error in the registers? This is only applicable
-         * When regitry check is enabled
+         * When registry check is enabled
          */
-        bool hasRegisterIntegrigtyError() { return _data & 0x10; }
+        bool hasRegisterIntegrityError() const { return _data & 0x10; }
         /**
          * Which channel does the current reading apply to?
          */
-        Channel currentConversionChannel();
+        Channel currentConversionChannel() const;
 };
 
 enum class SettleDelay {
@@ -229,11 +232,11 @@ class Reading {
         uint32_t _data;
         unsigned long _time;
     public:
-        Reading(bool valid, Status status, uint32_t data, long time) : _valid(valid), _status(status), _data(data), _time(time) {}
-        Status getStatus() { return _status; }
-        uint32_t getData() { return _data; }
-        unsigned long getTime() { return _time; }
-        bool isValid() { return _valid; }
+        Reading(bool valid, Status status, uint32_t data, unsigned long time) : _valid(valid), _status(status), _data(data), _time(time) {}
+        Status getStatus() const { return _status; }
+        uint32_t getData() const { return _data; }
+        unsigned long getTime() const { return _time; }
+        bool isValid() const { return _valid; }
 };
 
 class ADC {
@@ -247,36 +250,38 @@ private:
     bool _append_status = false;
     bool _continuous_read = false;
 
-    void _beginTransaction();
-    uint8_t _readRegisterNoTransaction(Register8Bit reg);
-    void _writeRegisterNoTransaction(Register8Bit reg, uint8_t data, bool confirm);
-    uint16_t _readRegisterNoTransaction(Register16Bit reg);
-    void _writeRegisterNoTransaction(Register16Bit reg, uint16_t data, bool confirm);
-    uint32_t _readRegisterNoTransaction(Register24Bit reg);
-    void _writeRegisterNoTransaction(Register24Bit reg, uint32_t data, bool confirm);
-    void _endTransaction();
+    void _beginTransaction() const;
+    uint8_t _readRegisterNoTransaction(Register8Bit reg) const;
+    void _writeRegisterNoTransaction(Register8Bit reg, uint8_t data, bool confirm) const;
+    uint16_t _readRegisterNoTransaction(Register16Bit reg) const;
+    void _writeRegisterNoTransaction(Register16Bit reg, uint16_t data, bool confirm) const;
+    uint32_t _readRegisterNoTransaction(Register24Bit reg) const;
+    void _writeRegisterNoTransaction(Register24Bit reg, uint32_t data, bool confirm) const;
+    void _endTransaction() const;
 public:
     ADC(uint8_t bus, uint8_t sclk, uint8_t cipo, uint8_t copi, uint8_t cs) : _spi(new SPIClass(bus)), _sclk(sclk), _cipo(cipo), _copi(copi), _cs(cs) {};
 
-    void initialize();
-    void reset();
-    void internalZeroScaleCalibration();
-    uint8_t readRegister(Register8Bit reg);
-    void writeRegister(Register8Bit reg, uint8_t data, bool confirm);
-    uint16_t readRegister(Register16Bit reg);
-    void writeRegister(Register16Bit reg, uint16_t data, bool confirm);
-    uint32_t readRegister(Register24Bit reg);
-    void writeRegister(Register24Bit reg, uint32_t data, bool confirm);
+    void initialize() const;
+    void reset() const;
+    void internalZeroScaleCalibration() const;
+    uint8_t readRegister(Register8Bit reg) const;
+    void writeRegister(Register8Bit reg, uint8_t data, bool confirm) const;
+    uint16_t readRegister(Register16Bit reg) const;
+    void writeRegister(Register16Bit reg, uint16_t data, bool confirm) const;
+    uint32_t readRegister(Register24Bit reg) const;
+    void writeRegister(Register24Bit reg, uint32_t data, bool confirm) const;
 
-    uint16_t getId();
-    Status getStatus();
-    void configureMode(Mode mode, bool single_cycle_settling, SettleDelay settle_delay);
+    uint16_t getId() const;
+    Status getStatus() const;
+    void configureMode(Mode mode, bool single_cycle_settling, SettleDelay settle_delay) const;
     void configureInterface(bool io_strength, bool continuous_read, bool append_status, ChecksumMode crc_mode);
-    void configureChannel(Channel channel,Setup setup, ChannelInput positive_input, ChannelInput negative_input);
-    void disableChannel(Channel channel);
-    void enableChannel(Channel channel);
-    void configureSetup(Setup setup, Filter filter, FilterSampleRate sample_rate);
-    void startReading();
-    void stopReading();
-    Reading read();
+    void configureChannel(Channel channel,Setup setup, ChannelInput positive_input, ChannelInput negative_input) const;
+    void disableChannel(Channel channel) const;
+    void enableChannel(Channel channel) const;
+    void configureSetup(Setup setup, Filter filter, FilterSampleRate sample_rate) const;
+    void startReading() const;
+    void stopReading() const;
+    Reading read() const;
 };
+
+#endif // ADC_H

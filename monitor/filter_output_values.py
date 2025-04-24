@@ -61,32 +61,40 @@ class OutputValues(DeviceMonitorFilterBase):
                         current = float(current_code) * self._current_conversion_factor
                         power = voltage * current
                         resistance = voltage / max(current, 0.000001)
-                        
+
                         if mode_code == 0:
-                            mode = "Current"
+                            mode = "Off"
                             setpoint_suffix = "A"
                             conversion_factor = self._current_conversion_factor
                         elif mode_code == 1:
+                            mode = "Current"
+                            setpoint_suffix = "A"
+                            conversion_factor = self._current_conversion_factor
+                        elif mode_code == 2:
                             mode = "Voltage"
                             setpoint_suffix = "V"
                             conversion_factor = self._voltage_conversion_factor
-                        elif mode_code == 2:
+                        elif mode_code == 3:
                             mode = "Power"
                             setpoint_suffix = "W"
                             conversion_factor = self._power_conversion_factor
-                        elif mode_code == 3:
+                        elif mode_code == 4:
                             mode = "Resistance"
                             setpoint_suffix = "Ω"
                             conversion_factor = self._resistance_conversion_factor
                         else:
                             mode = "Unknown"
+                            conversion_factor = 1
 
                         setpoint = float(setpoint_code) * conversion_factor
 
-                        result += f"Current: {current_code:8d} {self._nicify(current)}A, Voltage: {voltage_code:8d} {self._nicify(voltage)}V, Power: {self._nicify(power)}W, Resistance: {self._nicify(resistance)}Ω, Setpoint: {setpoint_code:8d} {self._nicify(setpoint)}{setpoint_suffix}\n Reading Count: {reading_count}, Invalid Count: {invalid_count}, Update DAC Count: {update_dac_count}\n"
+                        result += f"Current: {current_code:8d} {self._nicify(current)}A, Voltage: {voltage_code:8d} {self._nicify(voltage)}V, Power: {self._nicify(power)}W, Resistance: {self._nicify(resistance)}Ω, Setpoint: {setpoint_code:8d} {"Off" if mode == "Off" else self._nicify(setpoint)}{setpoint_suffix}\n Reading Count: {reading_count}, Invalid Count: {invalid_count}, Update DAC Count: {update_dac_count}\n"
                         self._receiving_status = False
                 else:
                     result += text_byte
+
+            if result[-1:] == '\n' and self._buffer != "":
+                result += f"New Setpoint: {self._buffer}\n"                
 
             return result
         except Exception as e:
@@ -105,55 +113,64 @@ class OutputValues(DeviceMonitorFilterBase):
         return f"{value:9.6f}"
 
     def tx(self, text):
-        self._buffer += text
-        if self._buffer.endswith(self._eol):
-            text = self._buffer[:-len(self._eol)]
-            self._buffer = ""
+        try:
+            for (index, text_char) in enumerate(text):
+                if ord(text_char) == 0x08 and len(self._buffer) > 0:
+                    self._buffer = self._buffer[:-1]
+                else:
+                    self._buffer += text_char
 
-            print(f"Received command: {text}")
+            if self._buffer.endswith(self._eol):
+                text = self._buffer[:-len(self._eol)]
+                self._buffer = ""
 
-            data = [0];
+                print(f"Received command: {text}")
 
-            if text[-1:].lower() == "a":
-                data.append(0)
-                conversion_factor = self._current_conversion_factor
-            elif text[-1:].lower() == "v":
-                data.append(1)
-                conversion_factor = self._voltage_conversion_factor
-            elif text[-1:].lower() == "w":
-                data.append(2)
-                conversion_factor = self._power_conversion_factor
-            elif text[-1:].lower() == "o" or text[-1:].lower() == "Ω":
-                data.append(3)
-                conversion_factor = self._resistance_conversion_factor
-            else:
-                print(f"Invalid command {ord(text[-1:])}")
-                return ""
-            
-            number_end = -2
+                data = [0];
 
-            if text[-2:-1] == "m":
-                multiplier = 0.001
-            elif text[-2:-1] == "u":
-                multiplier = 0.000001
-            elif text[-2:-1] == "k":
-                multiplier = 1000
-            elif text[-2:-1] == "M":
-                multiplier = 1000000
-            else:
-                number_end = -1
-                multiplier = 1
-            
-            value = int(float(text[:number_end]) * multiplier / conversion_factor)
+                if text[-1:].lower() == "a":
+                    data.append(1)
+                    conversion_factor = self._current_conversion_factor
+                elif text[-1:].lower() == "v":
+                    data.append(2)
+                    conversion_factor = self._voltage_conversion_factor
+                elif text[-1:].lower() == "w":
+                    data.append(3)
+                    conversion_factor = self._power_conversion_factor
+                elif text[-1:].lower() == "o" or text[-1:].lower() == "Ω":
+                    data.append(4)
+                    conversion_factor = self._resistance_conversion_factor
+                else:
+                    print(f"Invalid command {ord(text[-1:])}")
+                    return ""
 
-            print(f"Value: {value}")
-            value_bytes = value.to_bytes(4)
-            data += value_bytes
+                number_end = -2
 
-            print(f"Sending command: {data}")
+                if text[-2:-1] == "m":
+                    multiplier = 0.001
+                elif text[-2:-1] == "u":
+                    multiplier = 0.000001
+                elif text[-2:-1] == "k":
+                    multiplier = 1000
+                elif text[-2:-1] == "M":
+                    multiplier = 1000000
+                else:
+                    number_end = -1
+                    multiplier = 1
 
-            print(ord("".join([chr(data_byte) for data_byte in data])[-1]))
+                value = int(float(text[:number_end]) * multiplier / conversion_factor)
 
-            return "".join([chr(data_byte) for data_byte in data])
-        return ""
+                print(f"Value: {value}")
+                value_bytes = value.to_bytes(4)
+                data += value_bytes
+
+                print(f"Sending command: {data}")
+
+                print(ord("".join([chr(data_byte) for data_byte in data])[-1]))
+
+                return "".join([chr(data_byte) for data_byte in data])
+            return ""
+        except Exception as e:
+            print(traceback.format_exc())
+            raise e
 
