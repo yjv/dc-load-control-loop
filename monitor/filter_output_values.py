@@ -9,12 +9,12 @@ class OutputValues(DeviceMonitorFilterBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._receiving_status = False
-        self._status_bytes = []
+        self._state_bytes = []
         self._adc_conversion_factor = 1 / 15770583.04
         self._current_conversion_factor = self._adc_conversion_factor * 20.0
         self._voltage_conversion_factor = self._adc_conversion_factor * 600.0
-        self._power_conversion_factor = self._adc_conversion_factor * 200.0
-        self._resistance_conversion_factor = self._adc_conversion_factor * 20000.0
+        self._power_conversion_factor = 3.840381E-07
+        self._resistance_conversion_factor = 0.0004447747
 
         self._buffer = ""
 
@@ -35,6 +35,7 @@ class OutputValues(DeviceMonitorFilterBase):
         super().set_running_terminal(terminal)
 
     def rx(self, text):
+
         try:
             result = ""
 
@@ -42,20 +43,26 @@ class OutputValues(DeviceMonitorFilterBase):
 
                 if text_byte == '\xFF' and not self._receiving_status:
                     self._receiving_status = True
-                    self._status_bytes = []
+                    self._state_bytes = []
                     continue
 
                 if self._receiving_status:
-                    self._status_bytes.append(ord(text_byte))
-                    lens = len(self._status_bytes)
-                    if len(self._status_bytes) == 28:
-                        voltage_code = int.from_bytes(self._status_bytes[0:4])
-                        current_code = int.from_bytes(self._status_bytes[4:8])
-                        setpoint_code = int.from_bytes(self._status_bytes[8:12])
-                        mode_code = int.from_bytes(self._status_bytes[12:16])
-                        reading_count = int.from_bytes(self._status_bytes[16:20])
-                        invalid_count = int.from_bytes(self._status_bytes[20:24])
-                        update_dac_count = int.from_bytes(self._status_bytes[24:28])
+                    self._state_bytes.append(ord(text_byte))
+                    if len(self._state_bytes) == 37:
+                        reader = StateBytesReader(self._state_bytes)
+                        voltage_code = reader.read_int(4)
+                        current_code = reader.read_int(4)
+                        mode_code = reader.read_int(1)
+                        temperature = reader.read_int(2)
+                        fault_code = reader.read_int(1)
+                        mode_code = reader.read_int(1)
+                        setpoint_code = reader.read_int(4)
+                        gate_control_voltage_code = reader.read_int(4)
+                        update_gate_control_voltage_count = reader.read_int(4)
+                        reading_count = reader.read_int(4)
+                        invalid_voltage_count = reader.read_int(4)
+                        invalid_current_count = reader.read_int(4)
+                        invalid_count = invalid_voltage_count + invalid_current_count
 
                         voltage = float(voltage_code) * self._voltage_conversion_factor
                         current = float(current_code) * self._current_conversion_factor
@@ -88,7 +95,7 @@ class OutputValues(DeviceMonitorFilterBase):
 
                         setpoint = float(setpoint_code) * conversion_factor
 
-                        result += f"Current: {current_code:8d} {self._nicify(current)}A, Voltage: {voltage_code:8d} {self._nicify(voltage)}V, Power: {self._nicify(power)}W, Resistance: {self._nicify(resistance)}Ω, Setpoint: {setpoint_code:8d} {"Off" if mode == "Off" else self._nicify(setpoint)}{setpoint_suffix}\n Reading Count: {reading_count}, Invalid Count: {invalid_count}, Update DAC Count: {update_dac_count}\n"
+                        result += f"Current: {current_code:8d} {self._nicify(current)}A, Voltage: {voltage_code:8d} {self._nicify(voltage)}V, Power: {self._nicify(power)}W, Resistance: {self._nicify(resistance)}Ω, Setpoint: {setpoint_code:8d} {"Off" if mode == "Off" else self._nicify(setpoint)}{setpoint_suffix}\n Reading Count: {reading_count}, Invalid Count: {invalid_count}, Update DAC Count: {update_gate_control_voltage_count}\n"
                         self._receiving_status = False
                 else:
                     result += text_byte
@@ -174,3 +181,15 @@ class OutputValues(DeviceMonitorFilterBase):
             print(traceback.format_exc())
             raise e
 
+class StateBytesReader:
+    def __init__(self, state_bytes):
+        self._state_bytes = state_bytes
+        self._index = 0;
+
+    def read_bytes(self, size):
+        state_bytes = self._state_bytes[self._index:self._index + size]
+        self._index += size
+        return state_bytes
+    def read_int(self, size):
+        state_bytes = self.read_bytes(size)
+        return int.from_bytes(state_bytes, "big")
